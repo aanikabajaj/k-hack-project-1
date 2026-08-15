@@ -11,7 +11,7 @@
 import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { bookings, memberships, notifications } from "@/db/schema";
 import type { Booking, GymClass } from "@/db/schema";
-import type { db as Db } from "@/db";
+import type { DbOrTx } from "@/db";
 import { UNLIMITED_CREDITS } from "@/lib/constants";
 
 /**
@@ -33,7 +33,7 @@ export function hoursUntil(iso: string, now = new Date()): number {
 }
 
 /** A user's current membership, if they have one that hasn't expired. */
-export async function activeMembershipFor(db: typeof Db, userId: number) {
+export async function activeMembershipFor(db: DbOrTx, userId: number) {
   const today = new Date().toISOString().slice(0, 10);
   return db
     .select()
@@ -50,7 +50,7 @@ export async function activeMembershipFor(db: typeof Db, userId: number) {
 }
 
 /** How many "booked" (not waitlisted, not cancelled) seats a class has taken. */
-export async function bookedCount(db: typeof Db, classId: number): Promise<number> {
+export async function bookedCount(db: DbOrTx, classId: number): Promise<number> {
   const [{ count }] = await db
     .select({ count: sql<number>`count(*)` })
     .from(bookings)
@@ -59,7 +59,7 @@ export async function bookedCount(db: typeof Db, classId: number): Promise<numbe
   return Number(count);
 }
 
-export async function isClassFull(db: typeof Db, cls: Pick<GymClass, "id" | "capacity">) {
+export async function isClassFull(db: DbOrTx, cls: Pick<GymClass, "id" | "capacity">) {
   return (await bookedCount(db, cls.id)) >= cls.capacity;
 }
 
@@ -70,7 +70,7 @@ export async function isClassFull(db: typeof Db, cls: Pick<GymClass, "id" | "cap
  * happened, so callers can report it back to the member.
  */
 export async function refundIfEligible(
-  db: typeof Db,
+  db: DbOrTx,
   booking: Pick<Booking, "creditsUsed" | "membershipId">,
   cls: Pick<GymClass, "startsAt">,
 ): Promise<boolean> {
@@ -105,7 +105,7 @@ export async function refundIfEligible(
  * free the spot for the next person in line the same way.
  */
 export async function promoteNextWaitlisted(
-  db: typeof Db,
+  db: DbOrTx,
   cls: Pick<GymClass, "id" | "name" | "creditCost">,
 ) {
   const next = await db

@@ -16,3 +16,13 @@ if (process.env.NODE_ENV !== "production") {
 
 export const db = drizzle(client, { schema });
 export { schema };
+
+/**
+ * The type shared helpers in `server/routers/` accept for their `db`
+ * parameter, so the same function can run either directly against `db` or
+ * against the `tx` handed to a `db.transaction(async (tx) => ...)`
+ * callback - multi-step mutations (book, cancel, reschedule, subscribe) use
+ * a transaction so a capacity/credit check and the write it gates can't be
+ * split by a concurrent request; read-only queries just use `db`.
+ */
+export type DbOrTx = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];

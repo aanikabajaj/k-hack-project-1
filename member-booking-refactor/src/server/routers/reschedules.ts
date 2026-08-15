@@ -4,6 +4,7 @@ import type { TRPC_ERROR_CODE_KEY } from "@trpc/server";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { reschedules, bookings, classes, memberships } from "@/db/schema";
 import type { Booking, GymClass } from "@/db/schema";
+import type { DbOrTx } from "@/db";
 import { router, protectedProcedure } from "@/server/trpc";
 import {
   FREE_RESCHEDULE_HOURS,
@@ -31,7 +32,7 @@ type RescheduleCheck =
  * own way, so the rules themselves can't drift apart.
  */
 async function checkReschedule(
-  db: typeof import("@/db").db,
+  db: DbOrTx,
   userId: number,
   fromBookingId: number,
   toClassId: number,
@@ -151,118 +152,125 @@ export const reschedulesRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const check = await checkReschedule(
-        ctx.db,
-        ctx.user.id,
-        input.fromBookingId,
-        input.toClassId,
-      );
+      // The eligibility re-check, the credit movement, the new booking, the
+      // old one being cancelled, and the freed seat's promotion all need to
+      // land together - run them in one transaction so a concurrent request
+      // can't slip in between the "is the target still open" check and the
+      // insert that relies on it.
+      return ctx.db.transaction(async (tx) => {
+        const check = await checkReschedule(
+          tx,
+          ctx.user.id,
+          input.fromBookingId,
+          input.toClassId,
+        );
 
-      if (!check.ok) {
-        throw new TRPCError({ code: check.code, message: check.reason });
-      }
-
-      const { originalBooking, originalClass, targetClass, targetIsFull } = check;
-      const newStatus = targetIsFull ? "waitlisted" : "booked";
-
-      // What the new booking should charge depends on the status it's
-      // landing in, not on what the old booking happened to have stored.
-      // "Keep what you spent" (the old flat copy of `creditsUsed`) only
-      // makes sense between two confirmed spots - a status flip either
-      // direction needs its own credit movement:
-      //   - booked -> waitlisted: no longer holding a seat, so refund what
-      //     was paid instead of leaving it stuck on an unconfirmed booking
-      //     (which used to get charged *again* once promoteNextWaitlisted
-      //     ran, since that function assumes a waitlisted booking always
-      //     starts at 0 credits).
-      //   - waitlisted -> booked: was never charged in the first place, so
-      //     charge for the confirmed spot now, same as booking it fresh.
-      let newCreditsUsed = originalBooking.creditsUsed;
-      const membership = originalBooking.membershipId
-        ? await ctx.db
-            .select()
-            .from(memberships)
-            .where(eq(memberships.id, originalBooking.membershipId))
-            .get()
-        : undefined;
-      const unlimited = !!membership && membership.creditsRemaining >= UNLIMITED_CREDITS;
-
-      if (newStatus === "waitlisted") {
-        newCreditsUsed = 0;
-        if (
-          originalBooking.status === "booked" &&
-          originalBooking.creditsUsed > 0 &&
-          membership &&
-          !unlimited
-        ) {
-          await ctx.db
-            .update(memberships)
-            .set({ creditsRemaining: membership.creditsRemaining + originalBooking.creditsUsed })
-            .where(eq(memberships.id, membership.id));
+        if (!check.ok) {
+          throw new TRPCError({ code: check.code, message: check.reason });
         }
-      } else if (originalBooking.status === "waitlisted") {
-        if (!membership) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "No membership on file for this booking.",
-          });
-        }
-        if (!unlimited && membership.creditsRemaining < targetClass.creditCost) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "Not enough class credits remaining.",
-          });
-        }
-        newCreditsUsed = targetClass.creditCost;
-        if (!unlimited) {
-          await ctx.db
-            .update(memberships)
-            .set({ creditsRemaining: membership.creditsRemaining - targetClass.creditCost })
-            .where(eq(memberships.id, membership.id));
-        }
-      }
-      // booked -> booked: unchanged, they keep what they already paid.
 
-      const newBooking = await ctx.db
-        .insert(bookings)
-        .values({
-          classId: targetClass.id,
+        const { originalBooking, originalClass, targetClass, targetIsFull } = check;
+        const newStatus = targetIsFull ? "waitlisted" : "booked";
+
+        // What the new booking should charge depends on the status it's
+        // landing in, not on what the old booking happened to have stored.
+        // "Keep what you spent" (the old flat copy of `creditsUsed`) only
+        // makes sense between two confirmed spots - a status flip either
+        // direction needs its own credit movement:
+        //   - booked -> waitlisted: no longer holding a seat, so refund what
+        //     was paid instead of leaving it stuck on an unconfirmed booking
+        //     (which used to get charged *again* once promoteNextWaitlisted
+        //     ran, since that function assumes a waitlisted booking always
+        //     starts at 0 credits).
+        //   - waitlisted -> booked: was never charged in the first place, so
+        //     charge for the confirmed spot now, same as booking it fresh.
+        let newCreditsUsed = originalBooking.creditsUsed;
+        const membership = originalBooking.membershipId
+          ? await tx
+              .select()
+              .from(memberships)
+              .where(eq(memberships.id, originalBooking.membershipId))
+              .get()
+          : undefined;
+        const unlimited = !!membership && membership.creditsRemaining >= UNLIMITED_CREDITS;
+
+        if (newStatus === "waitlisted") {
+          newCreditsUsed = 0;
+          if (
+            originalBooking.status === "booked" &&
+            originalBooking.creditsUsed > 0 &&
+            membership &&
+            !unlimited
+          ) {
+            await tx
+              .update(memberships)
+              .set({ creditsRemaining: membership.creditsRemaining + originalBooking.creditsUsed })
+              .where(eq(memberships.id, membership.id));
+          }
+        } else if (originalBooking.status === "waitlisted") {
+          if (!membership) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "No membership on file for this booking.",
+            });
+          }
+          if (!unlimited && membership.creditsRemaining < targetClass.creditCost) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "Not enough class credits remaining.",
+            });
+          }
+          newCreditsUsed = targetClass.creditCost;
+          if (!unlimited) {
+            await tx
+              .update(memberships)
+              .set({ creditsRemaining: membership.creditsRemaining - targetClass.creditCost })
+              .where(eq(memberships.id, membership.id));
+          }
+        }
+        // booked -> booked: unchanged, they keep what they already paid.
+
+        const newBooking = await tx
+          .insert(bookings)
+          .values({
+            classId: targetClass.id,
+            userId: ctx.user.id,
+            membershipId: originalBooking.membershipId,
+            status: newStatus,
+            creditsUsed: newCreditsUsed,
+          })
+          .returning()
+          .get();
+
+        // Cancel the original booking. Any credits it used have already been
+        // accounted for above - refunded if the new spot isn't confirmed, or
+        // carried over as-is if it is.
+        await tx
+          .update(bookings)
+          .set({ status: "cancelled", cancelledAt: new Date().toISOString() })
+          .where(eq(bookings.id, originalBooking.id));
+
+        // If the original booking held a confirmed spot, freeing it should
+        // promote the next waitlisted member for that class - same as a
+        // plain cancellation would.
+        if (originalBooking.status === "booked") {
+          await promoteNextWaitlisted(tx, originalClass);
+        }
+
+        await tx.insert(reschedules).values({
           userId: ctx.user.id,
-          membershipId: originalBooking.membershipId,
-          status: newStatus,
-          creditsUsed: newCreditsUsed,
-        })
-        .returning()
-        .get();
+          fromBookingId: originalBooking.id,
+          toBookingId: newBooking.id,
+          fromClassId: originalClass.id,
+          toClassId: targetClass.id,
+        });
 
-      // Cancel the original booking. Any credits it used have already been
-      // accounted for above - refunded if the new spot isn't confirmed, or
-      // carried over as-is if it is.
-      await ctx.db
-        .update(bookings)
-        .set({ status: "cancelled", cancelledAt: new Date().toISOString() })
-        .where(eq(bookings.id, originalBooking.id));
-
-      // If the original booking held a confirmed spot, freeing it should
-      // promote the next waitlisted member for that class - same as a
-      // plain cancellation would.
-      if (originalBooking.status === "booked") {
-        await promoteNextWaitlisted(ctx.db, originalClass);
-      }
-
-      await ctx.db.insert(reschedules).values({
-        userId: ctx.user.id,
-        fromBookingId: originalBooking.id,
-        toBookingId: newBooking.id,
-        fromClassId: originalClass.id,
-        toClassId: targetClass.id,
+        return {
+          ok: true,
+          newBooking,
+          newStatus,
+        };
       });
-
-      return {
-        ok: true,
-        newBooking,
-        newStatus,
-      };
     }),
 
   history: protectedProcedure.query(async ({ ctx }) => {

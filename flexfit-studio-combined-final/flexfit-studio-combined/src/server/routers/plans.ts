@@ -3,6 +3,7 @@ import { TRPCError } from "@trpc/server";
 import { eq } from "drizzle-orm";
 import { membershipPlans, memberships, payments } from "@/db/schema";
 import { router, publicProcedure, protectedProcedure, adminProcedure } from "../trpc";
+import { activeMembershipFor } from "./booking-rules";
 
 function addDays(dateIso: string, days: number): string {
   const d = new Date(dateIso);
@@ -44,29 +45,51 @@ export const plansRouter = router({
 
       const today = new Date().toISOString().slice(0, 10);
 
-      const membership = await ctx.db
-        .insert(memberships)
-        .values({
+      // Buying a plan while one is already active tops it up onto the same
+      // row instead of creating a second "active" membership - two active
+      // rows used to mean whichever had the later endDate silently won every
+      // lookup (activeMembershipFor, members.profile), stranding the other
+      // one's remaining credits. Credits add; the end date extends from the
+      // existing membership's endDate rather than resetting from today, so
+      // buying early doesn't cost you the days you already paid for.
+      return ctx.db.transaction(async (tx) => {
+        const existing = await activeMembershipFor(tx, ctx.user.id);
+
+        const membership = existing
+          ? await tx
+              .update(memberships)
+              .set({
+                planId: plan.id,
+                endDate: addDays(existing.endDate, plan.durationDays),
+                creditsRemaining: existing.creditsRemaining + plan.classCredits,
+              })
+              .where(eq(memberships.id, existing.id))
+              .returning()
+              .get()
+          : await tx
+              .insert(memberships)
+              .values({
+                userId: ctx.user.id,
+                planId: plan.id,
+                startDate: today,
+                endDate: addDays(today, plan.durationDays),
+                creditsRemaining: plan.classCredits,
+                status: "active",
+              })
+              .returning()
+              .get();
+
+        await tx.insert(payments).values({
           userId: ctx.user.id,
-          planId: plan.id,
-          startDate: today,
-          endDate: addDays(today, plan.durationDays),
-          creditsRemaining: plan.classCredits,
-          status: "active",
-        })
-        .returning()
-        .get();
+          membershipId: membership.id,
+          amountCents: plan.priceCents,
+          method: input.method,
+          status: "paid",
+          reference: `PAY-${Date.now()}`,
+        });
 
-      await ctx.db.insert(payments).values({
-        userId: ctx.user.id,
-        membershipId: membership.id,
-        amountCents: plan.priceCents,
-        method: input.method,
-        status: "paid",
-        reference: `PAY-${Date.now()}`,
+        return membership;
       });
-
-      return membership;
     }),
 
   create: adminProcedure

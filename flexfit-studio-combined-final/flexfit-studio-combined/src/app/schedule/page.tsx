@@ -48,6 +48,11 @@ export default function SchedulePage() {
     onSuccess: async (result, variables) => {
       await utils.classes.list.invalidate();
       await utils.bookings.mine.invalidate();
+      // A booking landing as "waitlisted" needs the /waitlist page's own
+      // query invalidated too - bookings.mine alone doesn't cover it, and
+      // without this the waitlist page can serve a stale list (missing the
+      // entry just joined) for up to the query's 5s staleTime.
+      await utils.bookings.waitlisted.invalidate();
       const className = classes?.find((c) => c.id === variables.classId)?.name ?? "the class";
       setSuccessMessage(
         result.status === "waitlisted"
