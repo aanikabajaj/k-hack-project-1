@@ -114,9 +114,10 @@ into this folder's file set, even though the ownership table in
 
 ## What's still deliberately left alone
 
-- **`plans.subscribe` doesn't check for an existing active membership from this folder's
-  perspective** — resolved in the combined project (§4 above), but since `plans.ts` isn't
-  part of this folder, there's nothing to change here.
+Nothing behavioral remains open on this side — `plans.subscribe`'s double-membership issue
+(the last thing flagged as left-as-is) was resolved in the follow-up pass, §4 above. What's
+still intentionally untouched is architectural boundary, not a bug:
+
 - Shared infrastructure (`db/schema.ts`, `db/seed.ts`, `db/index.ts`, `server/trpc.ts`,
   `server/routers/_app.ts`, the tRPC route handler, root layout/providers) and staff/admin
   owned files (`NavBar.tsx`, `payments.ts`, the admin/corporate/trainer routers/services)

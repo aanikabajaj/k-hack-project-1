@@ -91,6 +91,10 @@ flagging per the "fix carefully or document it" instruction)
   second purchase should be blocked, or should top up/extend the existing
   membership instead, is a product decision, not something to guess at
   silently since it touches money and credits. Left as-is.
+  **Update (Aug 15):** decided - top up/extend the existing membership.
+  Fixed in `flexfit-studio-combined-final/src/server/routers/plans.ts`
+  only, since `plans.ts` isn't part of this folder's file set. See
+  [`fixes-2026-08-15.md`](fixes-2026-08-15.md).
 - **`.btn-sm` was used in `notifications/page.tsx` but never defined**, so
   the "Mark all as read" button silently rendered at normal button size.
   Added the class to `globals.css` (additive, see the shared-files table
