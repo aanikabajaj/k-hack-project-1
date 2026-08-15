@@ -126,7 +126,7 @@ this repo to pull it from directly):
      sometimes giving a free confirmed seat.
    - Joining a waitlist could be blocked by a credit-sufficiency check that should never have
      applied to waitlisting in the first place, since it's never charged credits.
-3. **A follow-up fix pass (August 15)** — three more gaps found while auditing the member
+3. **A follow-up fix pass** — three more gaps found while auditing the member
    side end-to-end a second time, none present in the original app either:
    - Booking a full class from `/schedule` didn't invalidate the query `/waitlist` reads, so
      `/waitlist` could show a stale list missing the entry just joined.
