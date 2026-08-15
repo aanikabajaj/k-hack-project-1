@@ -95,9 +95,9 @@ lives in the combined project. To actually run this side of the app (or any of t
 described below), use `flexfit-studio-combined-final/flexfit-studio-combined` — that's where
 this code ended up after the merge.
 
-See [`member-booking-refactor/documents/member-booking-notes.md`](member-booking-refactor/documents/member-booking-notes.md)
-for the detailed working notes on what was found broken and fixed on this side, and the
-reasoning behind the folder layout.
+See [`member-booking-refactor/documents/member-booking-final-summary.md`](member-booking-refactor/documents/member-booking-final-summary.md)
+for the complete, consolidated account of every refactor change and bug fix on this side to
+date — it links out to the detailed working notes and each individual fix write-up.
 
 ## What changed
 
@@ -126,9 +126,25 @@ this repo to pull it from directly):
      sometimes giving a free confirmed seat.
    - Joining a waitlist could be blocked by a credit-sufficiency check that should never have
      applied to waitlisting in the first place, since it's never charged credits.
+3. **A follow-up fix pass (August 15)** — three more gaps found while auditing the member
+   side end-to-end a second time, none present in the original app either:
+   - Booking a full class from `/schedule` didn't invalidate the query `/waitlist` reads, so
+     `/waitlist` could show a stale list missing the entry just joined.
+   - `plans.subscribe` always created a new membership row, even if the member already had
+     an active one — the older row's remaining credits became silently unreachable. It now
+     tops up the existing membership (credits add, end date extends) instead.
+   - `book`, `cancel`, and `reschedule` each did their reads and writes as separate
+     round trips instead of one transaction, so a capacity/credit check and the write it
+     gated could be split by a concurrent request. All three (and `subscribe`) now run
+     inside a real DB transaction.
+
+   Typechecked clean and verified end-to-end against a running dev server — booking,
+   cancellation, membership top-up, and rescheduling all confirmed working, including a
+   rejected booking rolling back cleanly.
 
 Full write-ups, including exact files touched and before/after behavior, are in each folder's
 `documents/` directory — see
-[`flexfit-studio-combined-final/flexfit-studio-combined/documents/changelog-2026-08-14.md`](flexfit-studio-combined-final/flexfit-studio-combined/documents/changelog-2026-08-14.md)
+[`flexfit-studio-combined-final/flexfit-studio-combined/documents/changelog-2026-08-14.md`](flexfit-studio-combined-final/flexfit-studio-combined/documents/changelog-2026-08-14.md),
+[`member-booking-refactor/documents/changelog-2026-08-14.md`](member-booking-refactor/documents/changelog-2026-08-14.md),
 and
-[`member-booking-refactor/documents/changelog-2026-08-14.md`](member-booking-refactor/documents/changelog-2026-08-14.md).
+[`flexfit-studio-combined-final/flexfit-studio-combined/documents/fixes-2026-08-15.md`](flexfit-studio-combined-final/flexfit-studio-combined/documents/fixes-2026-08-15.md).
